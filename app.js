@@ -16,20 +16,17 @@ function setStatus(live, text) {
 async function startCapture() {
     document.getElementById("startBtn").disabled = true;
 
-    // 1. First establish WebSocket connection cleanly
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(`${wsProtocol}://${window.location.host}/stream-audio`);
     socket.binaryType = "arraybuffer";
 
     socket.onopen = async () => {
-        console.log("[VoxShield] WebSocket connection established.");
+        console.log("[VoxShield] WebSocket Connected");
         setStatus(true, "streaming...");
         document.getElementById("stopBtn").disabled = false;
 
-        // 2. Start Microphone capture ONLY AFTER WebSocket is open
         try {
             micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             sourceNode = audioCtx.createMediaStreamSource(micStream);
 
@@ -40,7 +37,6 @@ async function startCapture() {
             processorNode.connect(audioCtx.destination);
 
             processorNode.onaudioprocess = (e) => {
-                // Strict ReadyState Check
                 if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
                 const inputData = e.inputBuffer.getChannelData(0);
@@ -50,7 +46,7 @@ async function startCapture() {
                 socket.send(pcm16);
             };
         } catch (err) {
-            alert("Could not access microphone: " + err.message);
+            alert("Microphone Error: " + err.message);
             stopCapture();
         }
     };
@@ -59,64 +55,43 @@ async function startCapture() {
         try {
             const data = JSON.parse(event.data);
             updateDashboard(data);
-            loadHistory();
         } catch (e) {
-            console.error("Error parsing WS message:", e);
+            console.error("Data error", e);
         }
     };
 
     socket.onclose = (e) => {
-        console.warn("[VoxShield] Socket closed:", e.code, e.reason);
+        console.warn("[VoxShield] Socket closed:", e.code);
         setStatus(false, "disconnected");
         cleanupAudio();
     };
 
     socket.onerror = (e) => {
-        console.error("[VoxShield] WebSocket error", e);
+        console.error("[VoxShield] WebSocket Error", e);
     };
 }
 
 function cleanupAudio() {
-    if (processorNode) {
-        processorNode.disconnect();
-        processorNode = null;
-    }
-    if (sourceNode) {
-        sourceNode.disconnect();
-        sourceNode = null;
-    }
-    if (micStream) {
-        micStream.getTracks().forEach(t => t.stop());
-        micStream = null;
-    }
-    if (audioCtx) {
-        audioCtx.close();
-        audioCtx = null;
-    }
+    if (processorNode) { processorNode.disconnect(); processorNode = null; }
+    if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
 }
 
 function stopCapture() {
     cleanupAudio();
-    if (socket) {
-        socket.close();
-        socket = null;
-    }
-
+    if (socket) { socket.close(); socket = null; }
     document.getElementById("startBtn").disabled = false;
     document.getElementById("stopBtn").disabled = true;
     setStatus(false, "idle");
 }
 
 function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
-    if (outputSampleRate === inputSampleRate) {
-        return buffer;
-    }
+    if (outputSampleRate === inputSampleRate) return buffer;
     const ratio = inputSampleRate / outputSampleRate;
     const newLength = Math.round(buffer.length / ratio);
     const result = new Float32Array(newLength);
-
-    let offsetResult = 0;
-    let offsetBuffer = 0;
+    let offsetResult = 0, offsetBuffer = 0;
     while (offsetResult < result.length) {
         const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
         let accum = 0, count = 0;
@@ -144,13 +119,9 @@ function floatTo16BitPCM(floatSamples) {
 }
 
 function updateDashboard(data) {
-    const cVal = document.getElementById("centroidVal");
-    const mVal = document.getElementById("mfccVal");
-    const confVal = document.getElementById("confVal");
-
-    if (cVal) cVal.innerText = data.centroid_mean + " Hz";
-    if (mVal) mVal.innerText = data.mfcc_var;
-    if (confVal) confVal.innerText = data.confidence + "%";
+    if (document.getElementById("centroidVal")) document.getElementById("centroidVal").innerText = data.centroid_mean + " Hz";
+    if (document.getElementById("mfccVal")) document.getElementById("mfccVal").innerText = data.mfcc_var;
+    if (document.getElementById("confVal")) document.getElementById("confVal").innerText = data.confidence + "%";
 
     const banner = document.getElementById("verdictBanner");
     if (banner) {
@@ -164,36 +135,3 @@ function updateDashboard(data) {
         }
     }
 }
-
-async function loadHistory() {
-    try {
-        const res = await fetch("/fetch-telemetry?limit=25");
-        const json = await res.json();
-        const body = document.getElementById("historyBody");
-        if (!body) return;
-
-        if (!json.logs || json.logs.length === 0) {
-            body.innerHTML = '<tr><td colspan="7" style="color:#6b7280;">no records yet</td></tr>';
-            return;
-        }
-
-        body.innerHTML = json.logs.map(row => {
-            const verdictClass = row.verdict === "SPOOF_DETECTED" ? "verdict-spoof" : "verdict-safe";
-            const timeStr = row.created_at ? new Date(row.created_at).toLocaleTimeString() : "-";
-            return `<tr>
-                <td>${row.id}</td>
-                <td>${row.session_id}</td>
-                <td>${row.spectral_centroid_mean}</td>
-                <td>${row.mfcc_variance}</td>
-                <td>${row.spoof_confidence}%</td>
-                <td class="${verdictClass}">${row.verdict}</td>
-                <td>${timeStr}</td>
-            </tr>`;
-        }).join("");
-
-    } catch (err) {
-        console.error("Failed to fetch telemetry", err);
-    }
-}
-
-window.onload = loadHistory;
