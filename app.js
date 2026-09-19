@@ -8,7 +8,7 @@ let socket = null;
 
 const TARGET_SAMPLE_RATE = 16000;
 
-// UI Helpers
+// UI Status Updater
 function setStatus(live, text) {
     const dot = document.getElementById("statusDot");
     const txt = document.getElementById("statusText");
@@ -16,7 +16,7 @@ function setStatus(live, text) {
     if (txt) txt.innerText = text;
 }
 
-// Start Capturing Audio & Open WebSocket
+// Start Audio Capture & WebSocket Stream
 async function startCapture() {
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -77,33 +77,16 @@ async function startCapture() {
     };
 }
 
-// Clean up Audio Context & Stream Tracks
 function cleanupAudio() {
-    if (processorNode) { 
-        processorNode.disconnect(); 
-        processorNode = null; 
-    }
-    if (sourceNode) { 
-        sourceNode.disconnect(); 
-        sourceNode = null; 
-    }
-    if (micStream) { 
-        micStream.getTracks().forEach(t => t.stop()); 
-        micStream = null; 
-    }
-    if (audioCtx) { 
-        audioCtx.close(); 
-        audioCtx = null; 
-    }
+    if (processorNode) { processorNode.disconnect(); processorNode = null; }
+    if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
 }
 
-// Stop Audio Capture
 function stopCapture() {
     cleanupAudio();
-    if (socket) { 
-        socket.close(); 
-        socket = null; 
-    }
+    if (socket) { socket.close(); socket = null; }
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
     if (startBtn) startBtn.disabled = false;
@@ -111,7 +94,6 @@ function stopCapture() {
     setStatus(false, "idle");
 }
 
-// Downsample WebAudio API Float32 to 16kHz
 function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
     if (outputSampleRate === inputSampleRate) return buffer;
     const ratio = inputSampleRate / outputSampleRate;
@@ -132,7 +114,6 @@ function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
     return result;
 }
 
-// Convert Float32 samples to PCM 16-bit ArrayBuffer
 function floatTo16BitPCM(floatSamples) {
     const buffer = new ArrayBuffer(floatSamples.length * 2);
     const view = new DataView(buffer);
@@ -145,7 +126,7 @@ function floatTo16BitPCM(floatSamples) {
     return buffer;
 }
 
-// Update Real-Time Metrics & Banner
+// Update Real-Time Dashboard
 function updateDashboard(data) {
     if (document.getElementById("centroidVal")) {
         document.getElementById("centroidVal").innerText = data.centroid_mean + " Hz";
@@ -169,53 +150,51 @@ function updateDashboard(data) {
         }
     }
 
-    // Auto-fetch fresh threat history whenever backend saves a new analysis chunk
-    fetchHistory();
+    // Auto Refresh Threat History Table
+    loadHistory();
 }
 
-// Fetch Threat History Ledger Records
-async function fetchHistory() {
+// 🔥 Matched Function Name & ID with index.html
+async function loadHistory() {
     try {
         const res = await fetch('/fetch-telemetry?limit=25');
         if (!res.ok) return;
         const data = await res.json();
 
-        // Support both <tbody> tag or container table body
-        const tbody = document.getElementById("ledgerTbody") || document.querySelector("table tbody");
+        // Target id="historyBody" from HTML
+        const tbody = document.getElementById("historyBody");
         if (!tbody) return;
 
         if (!data.logs || data.logs.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;">No records yet</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" style="color:#6b7280; text-align:center;">no records loaded yet</td></tr>`;
             return;
         }
 
         tbody.innerHTML = "";
         data.logs.forEach(log => {
-            const dateStr = log.created_at ? new Date(log.created_at).toLocaleTimeString() : "--";
+            const timeVal = log.created_at ? new Date(log.created_at).toLocaleTimeString() : "--";
             const isSpoof = log.verdict === "SPOOF_DETECTED";
             
             const row = document.createElement("tr");
             row.innerHTML = `
                 <td>#${log.id}</td>
-                <td><code>${log.session_id}</code></td>
+                <td><code>${log.session_id || 'stream'}</code></td>
                 <td>${log.spectral_centroid_mean} Hz</td>
                 <td>${log.mfcc_variance}</td>
                 <td>${log.spoof_confidence}%</td>
-                <td>
-                    <span class="badge ${isSpoof ? 'badge-spoof' : 'badge-safe'}" style="color: ${isSpoof ? '#ff4d4d' : '#2ecc71'}; font-weight: bold;">
-                        ${log.verdict}
-                    </span>
+                <td style="color: ${isSpoof ? '#ef4444' : '#10b981'}; font-weight: 600;">
+                    ${log.verdict}
                 </td>
-                <td>${dateStr}</td>
+                <td>${timeVal}</td>
             `;
             tbody.appendChild(row);
         });
     } catch (err) {
-        console.error("[VoxShield] History fetch error:", err);
+        console.error("[VoxShield] Error loading history:", err);
     }
 }
 
-// Initial Load Handler
+// Load history immediately on page load
 document.addEventListener("DOMContentLoaded", () => {
-    fetchHistory();
+    loadHistory();
 });
