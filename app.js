@@ -129,61 +129,71 @@ function floatTo16BitPCM(floatSamples) {
 // Update Real-Time Dashboard
 function updateDashboard(data) {
     if (document.getElementById("centroidVal")) {
-        document.getElementById("centroidVal").innerText = data.centroid_mean + " Hz";
+        document.getElementById("centroidVal").innerText = (data.centroid_mean || data.spectral_centroid || '--') + " Hz";
     }
     if (document.getElementById("mfccVal")) {
-        document.getElementById("mfccVal").innerText = data.mfcc_var;
+        document.getElementById("mfccVal").innerText = data.mfcc_var || data.mfcc_variance || '--';
     }
     if (document.getElementById("confVal")) {
-        document.getElementById("confVal").innerText = data.confidence + "%";
+        document.getElementById("confVal").innerText = (data.confidence || data.spoof_confidence || '--') + "%";
     }
 
     const banner = document.getElementById("verdictBanner");
     if (banner) {
         banner.classList.remove("safe", "spoof");
+        const confText = data.confidence || data.spoof_confidence || 0;
         if (data.verdict === "SPOOF_DETECTED") {
             banner.classList.add("spoof");
-            banner.innerText = "⚠ SPOOF DETECTED — Confidence " + data.confidence + "%";
+            banner.innerText = "⚠ SPOOF DETECTED — Confidence " + confText + "%";
         } else {
             banner.classList.add("safe");
-            banner.innerText = "✓ SAFE — Confidence " + data.confidence + "%";
+            banner.innerText = "✓ SAFE — Confidence " + confText + "%";
         }
     }
 
-    // Auto Refresh Threat History Table
+    // Auto-refresh Threat History Table on new data
     loadHistory();
 }
 
-// 🔥 Matched Function Name & ID with index.html
+// History Loader (Matches index.html id="historyBody" & onclick="loadHistory()")
 async function loadHistory() {
     try {
         const res = await fetch('/fetch-telemetry?limit=25');
         if (!res.ok) return;
         const data = await res.json();
 
-        // Target id="historyBody" from HTML
         const tbody = document.getElementById("historyBody");
         if (!tbody) return;
 
-        if (!data.logs || data.logs.length === 0) {
+        const logsArray = Array.isArray(data) ? data : (data.logs || []);
+
+        if (logsArray.length === 0) {
             tbody.innerHTML = `<tr><td colspan="7" style="color:#6b7280; text-align:center;">no records loaded yet</td></tr>`;
             return;
         }
 
         tbody.innerHTML = "";
-        data.logs.forEach(log => {
-            const timeVal = log.created_at ? new Date(log.created_at).toLocaleTimeString() : "--";
-            const isSpoof = log.verdict === "SPOOF_DETECTED";
+        logsArray.forEach((log, index) => {
+            const id = log.id || (index + 1);
+            const session = log.session_id || log.session || 'stream';
+            const centroid = log.spectral_centroid_mean || log.spectral_centroid || log.centroid || '--';
+            const mfcc = log.mfcc_variance || log.mfcc_var || log.mfcc || '--';
+            const conf = log.spoof_confidence || log.confidence || '--';
+            const verdict = log.verdict || 'UNKNOWN';
+            const created = log.created_at || log.timestamp || log.time;
+            const timeVal = created ? new Date(created).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+            const isSpoof = verdict === "SPOOF_DETECTED";
             
             const row = document.createElement("tr");
             row.innerHTML = `
-                <td>#${log.id}</td>
-                <td><code>${log.session_id || 'stream'}</code></td>
-                <td>${log.spectral_centroid_mean} Hz</td>
-                <td>${log.mfcc_variance}</td>
-                <td>${log.spoof_confidence}%</td>
+                <td>#${id}</td>
+                <td><code>${session}</code></td>
+                <td>${centroid} Hz</td>
+                <td>${mfcc}</td>
+                <td>${conf}%</td>
                 <td style="color: ${isSpoof ? '#ef4444' : '#10b981'}; font-weight: 600;">
-                    ${log.verdict}
+                    ${verdict}
                 </td>
                 <td>${timeVal}</td>
             `;
@@ -194,7 +204,7 @@ async function loadHistory() {
     }
 }
 
-// Load history immediately on page load
+// Initial Load Handler
 document.addEventListener("DOMContentLoaded", () => {
     loadHistory();
 });
