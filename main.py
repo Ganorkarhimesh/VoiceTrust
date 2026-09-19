@@ -9,6 +9,7 @@
 import json
 import uuid
 import os
+import asyncio
 import numpy as np
 import librosa
 
@@ -36,7 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ----------------------------------------------------------------
 # Configuration / Constants
 # ----------------------------------------------------------------
-SAMPLE_RATE = 16000          
+SAMPLE_RATE = 16000         
 SPOOF_THRESHOLD = 88.0       
 MIN_SAMPLES_FOR_ANALYSIS = SAMPLE_RATE  
 
@@ -161,11 +162,17 @@ async def stream_audio(ws: WebSocket):
         while True:
             raw_chunk = await ws.receive_bytes()
 
+            if not raw_chunk:
+                continue
+
             chunk_float = pcm16_bytes_to_float32(raw_chunk)
             buffer = np.concatenate((buffer, chunk_float))
 
             if len(buffer) >= MIN_SAMPLES_FOR_ANALYSIS:
-                features = extract_features(buffer, sr=SAMPLE_RATE)
+                # Offload feature extraction to thread executor to prevent blocking WS
+                loop = asyncio.get_event_loop()
+                features = await loop.run_in_executor(None, extract_features, buffer.copy(), SAMPLE_RATE)
+                
                 confidence = score_spoof_confidence(
                     features["centroid_mean"], features["mfcc_var"]
                 )
@@ -193,7 +200,7 @@ async def stream_audio(ws: WebSocket):
                 buffer = np.array([], dtype=np.float32)
 
     except WebSocketDisconnect:
-        print(f"[VoxShield] Session {session_id} disconnected")
+        print(f"[VoxShield] Session {session_id} gracefully disconnected")
     except Exception as e:
         print(f"[VoxShield] Error in session {session_id}: {e}")
     finally:
