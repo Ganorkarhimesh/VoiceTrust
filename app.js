@@ -9,70 +9,98 @@ const TARGET_SAMPLE_RATE = 16000;
 function setStatus(live, text) {
     const dot = document.getElementById("statusDot");
     const txt = document.getElementById("statusText");
-    dot.classList.toggle("live", live);
-    txt.innerText = text;
+    if (dot) dot.classList.toggle("live", live);
+    if (txt) txt.innerText = text;
 }
 
 async function startCapture() {
     document.getElementById("startBtn").disabled = true;
 
-    try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-        alert("Could not access microphone: " + err.message);
-        document.getElementById("startBtn").disabled = false;
-        return;
-    }
-
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    sourceNode = audioCtx.createMediaStreamSource(micStream);
-
-    const bufferSize = 4096;
-    processorNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
-
-    sourceNode.connect(processorNode);
-    processorNode.connect(audioCtx.destination);
-
+    // 1. First establish WebSocket connection cleanly
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     socket = new WebSocket(`${wsProtocol}://${window.location.host}/stream-audio`);
     socket.binaryType = "arraybuffer";
 
-    socket.onopen = () => {
+    socket.onopen = async () => {
+        console.log("[VoxShield] WebSocket connection established.");
         setStatus(true, "streaming...");
         document.getElementById("stopBtn").disabled = false;
+
+        // 2. Start Microphone capture ONLY AFTER WebSocket is open
+        try {
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            sourceNode = audioCtx.createMediaStreamSource(micStream);
+
+            const bufferSize = 4096;
+            processorNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+
+            sourceNode.connect(processorNode);
+            processorNode.connect(audioCtx.destination);
+
+            processorNode.onaudioprocess = (e) => {
+                // Strict ReadyState Check
+                if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+                const downsampled = downsampleBuffer(inputData, audioCtx.sampleRate, TARGET_SAMPLE_RATE);
+                const pcm16 = floatTo16BitPCM(downsampled);
+
+                socket.send(pcm16);
+            };
+        } catch (err) {
+            alert("Could not access microphone: " + err.message);
+            stopCapture();
+        }
     };
 
     socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        updateDashboard(data);
-        loadHistory();
+        try {
+            const data = JSON.parse(event.data);
+            updateDashboard(data);
+            loadHistory();
+        } catch (e) {
+            console.error("Error parsing WS message:", e);
+        }
     };
 
-    socket.onclose = () => {
+    socket.onclose = (e) => {
+        console.warn("[VoxShield] Socket closed:", e.code, e.reason);
         setStatus(false, "disconnected");
+        cleanupAudio();
     };
 
     socket.onerror = (e) => {
-        console.error("websocket error", e);
-    };
-
-    processorNode.onaudioprocess = (e) => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        const downsampled = downsampleBuffer(inputData, audioCtx.sampleRate, TARGET_SAMPLE_RATE);
-        const pcm16 = floatTo16BitPCM(downsampled);
-
-        socket.send(pcm16);
+        console.error("[VoxShield] WebSocket error", e);
     };
 }
 
+function cleanupAudio() {
+    if (processorNode) {
+        processorNode.disconnect();
+        processorNode = null;
+    }
+    if (sourceNode) {
+        sourceNode.disconnect();
+        sourceNode = null;
+    }
+    if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+    }
+    if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+    }
+}
+
 function stopCapture() {
-    if (processorNode) processorNode.disconnect();
-    if (sourceNode) sourceNode.disconnect();
-    if (micStream) micStream.getTracks().forEach(t => t.stop());
-    if (socket) socket.close();
-    if (audioCtx) audioCtx.close();
+    cleanupAudio();
+    if (socket) {
+        socket.close();
+        socket = null;
+    }
 
     document.getElementById("startBtn").disabled = false;
     document.getElementById("stopBtn").disabled = true;
@@ -116,19 +144,24 @@ function floatTo16BitPCM(floatSamples) {
 }
 
 function updateDashboard(data) {
-    document.getElementById("centroidVal").innerText = data.centroid_mean + " Hz";
-    document.getElementById("mfccVal").innerText = data.mfcc_var;
-    document.getElementById("confVal").innerText = data.confidence + "%";
+    const cVal = document.getElementById("centroidVal");
+    const mVal = document.getElementById("mfccVal");
+    const confVal = document.getElementById("confVal");
+
+    if (cVal) cVal.innerText = data.centroid_mean + " Hz";
+    if (mVal) mVal.innerText = data.mfcc_var;
+    if (confVal) confVal.innerText = data.confidence + "%";
 
     const banner = document.getElementById("verdictBanner");
-    banner.classList.remove("safe", "spoof");
-
-    if (data.verdict === "SPOOF_DETECTED") {
-        banner.classList.add("spoof");
-        banner.innerText = "⚠ SPOOF DETECTED — Confidence " + data.confidence + "%";
-    } else {
-        banner.classList.add("safe");
-        banner.innerText = "✓ SAFE — Confidence " + data.confidence + "%";
+    if (banner) {
+        banner.classList.remove("safe", "spoof");
+        if (data.verdict === "SPOOF_DETECTED") {
+            banner.classList.add("spoof");
+            banner.innerText = "⚠ SPOOF DETECTED — Confidence " + data.confidence + "%";
+        } else {
+            banner.classList.add("safe");
+            banner.innerText = "✓ SAFE — Confidence " + data.confidence + "%";
+        }
     }
 }
 
@@ -137,6 +170,7 @@ async function loadHistory() {
         const res = await fetch("/fetch-telemetry?limit=25");
         const json = await res.json();
         const body = document.getElementById("historyBody");
+        if (!body) return;
 
         if (!json.logs || json.logs.length === 0) {
             body.innerHTML = '<tr><td colspan="7" style="color:#6b7280;">no records yet</td></tr>';
@@ -158,7 +192,7 @@ async function loadHistory() {
         }).join("");
 
     } catch (err) {
-        console.error("failed to fetch telemetry", err);
+        console.error("Failed to fetch telemetry", err);
     }
 }
 
