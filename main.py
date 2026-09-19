@@ -14,7 +14,7 @@ import numpy as np
 import librosa
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.middleware.cors import CORSMmiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -88,7 +88,6 @@ def score_spoof_confidence(centroid_mean: float, mfcc_var: float) -> float:
 
 
 def pcm16_bytes_to_float32(raw_bytes: bytes) -> np.ndarray:
-    # Ensure byte length is even for int16 conversion
     if len(raw_bytes) % 2 != 0:
         raw_bytes = raw_bytes[:len(raw_bytes) - 1]
     int16_arr = np.frombuffer(raw_bytes, dtype=np.int16)
@@ -192,7 +191,6 @@ async def stream_audio(ws: WebSocket):
 
                 verdict = "SPOOF_DETECTED" if confidence >= SPOOF_THRESHOLD else "SAFE"
 
-                # DB session created and closed strictly inside execution block
                 db = SessionLocal()
                 try:
                     log_entry = save_log(
