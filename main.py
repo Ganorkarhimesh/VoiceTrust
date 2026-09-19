@@ -14,7 +14,7 @@ import numpy as np
 import librosa
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMmiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -46,21 +46,27 @@ CENTROID_SYNTHETIC_BAND = (1500, 2600)
 
 
 def extract_features(audio_float: np.ndarray, sr: int = SAMPLE_RATE):
-    if np.all(audio_float == 0):
-        audio_float = audio_float + 1e-6
+    try:
+        if len(audio_float) < 1000:
+            return None
+            
+        if np.all(audio_float == 0):
+            audio_float = audio_float + 1e-6
 
-    mfcc = librosa.feature.mfcc(y=audio_float, sr=sr, n_mfcc=13)
-    centroid = librosa.feature.spectral_centroid(y=audio_float, sr=sr)
+        mfcc = librosa.feature.mfcc(y=audio_float, sr=sr, n_mfcc=13)
+        centroid = librosa.feature.spectral_centroid(y=audio_float, sr=sr)
 
-    mfcc_variance_per_coeff = np.var(mfcc, axis=1)
-    mfcc_var = float(np.mean(mfcc_variance_per_coeff))
-    centroid_mean = float(np.mean(centroid))
+        mfcc_variance_per_coeff = np.var(mfcc, axis=1)
+        mfcc_var = float(np.mean(mfcc_variance_per_coeff))
+        centroid_mean = float(np.mean(centroid))
 
-    return {
-        "centroid_mean": centroid_mean,
-        "mfcc_var": mfcc_var,
-        "mfcc_matrix": mfcc,
-    }
+        return {
+            "centroid_mean": centroid_mean,
+            "mfcc_var": mfcc_var,
+        }
+    except Exception as e:
+        print(f"[VoxShield] Feature Extraction Error: {e}")
+        return None
 
 
 def score_spoof_confidence(centroid_mean: float, mfcc_var: float) -> float:
@@ -82,12 +88,15 @@ def score_spoof_confidence(centroid_mean: float, mfcc_var: float) -> float:
 
 
 def pcm16_bytes_to_float32(raw_bytes: bytes) -> np.ndarray:
+    # Ensure byte length is even for int16 conversion
+    if len(raw_bytes) % 2 != 0:
+        raw_bytes = raw_bytes[:len(raw_bytes) - 1]
     int16_arr = np.frombuffer(raw_bytes, dtype=np.int16)
     float_arr = int16_arr.astype(np.float32) / 32768.0
     return float_arr
 
 
-def save_log(db: Session, session_id: str, centroid_mean: float,
+def save_log(db_session: Session, session_id: str, centroid_mean: float,
              mfcc_var: float, confidence: float, verdict: str) -> ThreatLog:
     entry = ThreatLog(
         session_id=session_id,
@@ -96,9 +105,9 @@ def save_log(db: Session, session_id: str, centroid_mean: float,
         spoof_confidence=confidence,
         verdict=verdict,
     )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    db_session.add(entry)
+    db_session.commit()
+    db_session.refresh(entry)
     return entry
 
 
@@ -154,7 +163,6 @@ async def stream_audio(ws: WebSocket):
 
     session_id = str(uuid.uuid4())[:8]
     buffer = np.array([], dtype=np.float32)
-    db = SessionLocal()
 
     print(f"[VoxShield] Client connected -> session {session_id}")
 
@@ -162,31 +170,42 @@ async def stream_audio(ws: WebSocket):
         while True:
             raw_chunk = await ws.receive_bytes()
 
-            if not raw_chunk:
+            if not raw_chunk or len(raw_chunk) < 4:
                 continue
 
             chunk_float = pcm16_bytes_to_float32(raw_chunk)
             buffer = np.concatenate((buffer, chunk_float))
 
             if len(buffer) >= MIN_SAMPLES_FOR_ANALYSIS:
-                # Offload feature extraction to thread executor to prevent blocking WS
+                analysis_chunk = buffer[:MIN_SAMPLES_FOR_ANALYSIS].copy()
+                buffer = buffer[MIN_SAMPLES_FOR_ANALYSIS:]
+
                 loop = asyncio.get_event_loop()
-                features = await loop.run_in_executor(None, extract_features, buffer.copy(), SAMPLE_RATE)
+                features = await loop.run_in_executor(None, extract_features, analysis_chunk, SAMPLE_RATE)
                 
+                if features is None:
+                    continue
+
                 confidence = score_spoof_confidence(
                     features["centroid_mean"], features["mfcc_var"]
                 )
 
                 verdict = "SPOOF_DETECTED" if confidence >= SPOOF_THRESHOLD else "SAFE"
 
-                log_entry = save_log(
-                    db,
-                    session_id,
-                    features["centroid_mean"],
-                    features["mfcc_var"],
-                    confidence,
-                    verdict,
-                )
+                # DB session created and closed strictly inside execution block
+                db = SessionLocal()
+                try:
+                    log_entry = save_log(
+                        db,
+                        session_id,
+                        features["centroid_mean"],
+                        features["mfcc_var"],
+                        confidence,
+                        verdict,
+                    )
+                    log_id = log_entry.id
+                finally:
+                    db.close()
 
                 await ws.send_text(json.dumps({
                     "session_id": session_id,
@@ -194,17 +213,15 @@ async def stream_audio(ws: WebSocket):
                     "mfcc_var": round(features["mfcc_var"], 2),
                     "confidence": round(confidence, 2),
                     "verdict": verdict,
-                    "log_id": log_entry.id,
+                    "log_id": log_id,
                 }))
-
-                buffer = np.array([], dtype=np.float32)
 
     except WebSocketDisconnect:
         print(f"[VoxShield] Session {session_id} gracefully disconnected")
     except Exception as e:
         print(f"[VoxShield] Error in session {session_id}: {e}")
     finally:
-        db.close()
+        print(f"[VoxShield] Session {session_id} closed.")
 
 
 if __name__ == "__main__":
