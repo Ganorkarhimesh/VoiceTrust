@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VoxShield | SIH26104</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+    <h1>VoxShield</h1>
+    <span class="tag">SIH26104 — Voice Clone Detection</span>
+</header>
+
+<div class="wrap">
+
+    <div class="panel">
+        <h2>Live Capture</h2>
+        <div class="controls">
+            <button id="startBtn" onclick="startCapture()">Start Monitoring</button>
+            <button id="stopBtn" onclick="stopCapture()" disabled>Stop</button>
+            <span>
+                <span id="statusDot"></span>
+                <span id="statusText">idle</span>
+            </span>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-box">
+                <div class="label">Spectral Centroid</div>
+                <div class="value" id="centroidVal">--</div>
+            </div>
+            <div class="metric-box">
+                <div class="label">MFCC Variance</div>
+                <div class="value" id="mfccVal">--</div>
+            </div>
+            <div class="metric-box">
+                <div class="label">Spoof Confidence</div>
+                <div class="value" id="confVal">--</div>
+            </div>
+        </div>
+
+        <div class="verdict-banner" id="verdictBanner">
+            Waiting for audio stream...
+        </div>
+
+        <p class="note">
+            Mic audio is captured via the WebAudio API, downsampled to 16kHz mono PCM16,
+            and streamed to the backend over a websocket in real time. Detection threshold
+            is set at 88% spoof confidence (as per our project spec).
+        </p>
+    </div>
+
+    <div class="panel">
+        <h2>Threat History Ledger <button id="refreshBtn" onclick="loadHistory()">Refresh</button></h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Session</th>
+                    <th>Centroid (Hz)</th>
+                    <th>MFCC Var</th>
+                    <th>Confidence</th>
+                    <th>Verdict</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="historyBody">
+                <tr><td colspan="7" style="color:#6b7280;">no records loaded yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
