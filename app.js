@@ -126,22 +126,22 @@ function floatTo16BitPCM(floatSamples) {
     return buffer;
 }
 
-// Update Real-Time Dashboard
+// Update Real-Time Dashboard Cards
 function updateDashboard(data) {
     if (document.getElementById("centroidVal")) {
-        document.getElementById("centroidVal").innerText = (data.centroid_mean || data.spectral_centroid || '--') + " Hz";
+        document.getElementById("centroidVal").innerText = (data.centroid_mean || '--') + " Hz";
     }
     if (document.getElementById("mfccVal")) {
-        document.getElementById("mfccVal").innerText = data.mfcc_var || data.mfcc_variance || '--';
+        document.getElementById("mfccVal").innerText = data.mfcc_var || '--';
     }
     if (document.getElementById("confVal")) {
-        document.getElementById("confVal").innerText = (data.confidence || data.spoof_confidence || '--') + "%";
+        document.getElementById("confVal").innerText = (data.confidence || '--') + "%";
     }
 
     const banner = document.getElementById("verdictBanner");
     if (banner) {
         banner.classList.remove("safe", "spoof");
-        const confText = data.confidence || data.spoof_confidence || 0;
+        const confText = data.confidence || 0;
         if (data.verdict === "SPOOF_DETECTED") {
             banner.classList.add("spoof");
             banner.innerText = "⚠ SPOOF DETECTED — Confidence " + confText + "%";
@@ -151,19 +151,26 @@ function updateDashboard(data) {
         }
     }
 
-    // Auto-refresh Threat History Table on new data
+    // Har incoming frame par auto reload history
     loadHistory();
 }
 
-// History Loader (Matches index.html id="historyBody" & onclick="loadHistory()")
+// Fetch & Render Threat History Ledger Table
 async function loadHistory() {
     try {
         const res = await fetch('/fetch-telemetry?limit=25');
         if (!res.ok) return;
         const data = await res.json();
 
-        const tbody = document.getElementById("historyBody");
-        if (!tbody) return;
+        // Target tbody (Fallback for multiple common container IDs)
+        const tbody = document.getElementById("historyBody") || 
+                      document.getElementById("telemetryBody") || 
+                      document.querySelector("table tbody");
+
+        if (!tbody) {
+            console.error("[VoxShield] Table <tbody> element not found in HTML!");
+            return;
+        }
 
         const logsArray = Array.isArray(data) ? data : (data.logs || []);
 
@@ -173,14 +180,17 @@ async function loadHistory() {
         }
 
         tbody.innerHTML = "";
-        logsArray.forEach((log, index) => {
-            const id = log.id || (index + 1);
-            const session = log.session_id || log.session || 'stream';
-            const centroid = log.spectral_centroid_mean || log.spectral_centroid || log.centroid || '--';
-            const mfcc = log.mfcc_variance || log.mfcc_var || log.mfcc || '--';
-            const conf = log.spoof_confidence || log.confidence || '--';
+        logsArray.forEach((log) => {
+            const id = log.id || '--';
+            const session = log.session_id || 'stream';
+            
+            // Fixed key mapping from main.py JSON
+            const centroid = log.spectral_centroid_mean ?? log.centroid_mean ?? '--';
+            const mfcc = log.mfcc_variance ?? log.mfcc_var ?? '--';
+            const conf = log.spoof_confidence ?? log.confidence ?? '--';
             const verdict = log.verdict || 'UNKNOWN';
-            const created = log.created_at || log.timestamp || log.time;
+            
+            const created = log.created_at;
             const timeVal = created ? new Date(created).toLocaleTimeString() : new Date().toLocaleTimeString();
 
             const isSpoof = verdict === "SPOOF_DETECTED";
