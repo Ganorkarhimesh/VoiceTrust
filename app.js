@@ -8,7 +8,6 @@ let socket = null;
 
 const TARGET_SAMPLE_RATE = 16000;
 
-// UI Status Updater
 function setStatus(live, text) {
     const dot = document.getElementById("statusDot");
     const txt = document.getElementById("statusText");
@@ -16,7 +15,65 @@ function setStatus(live, text) {
     if (txt) txt.innerText = text;
 }
 
-// Start Audio Capture & WebSocket Stream
+// Fetch & Render Threat History Ledger Table
+window.loadHistory = async function () {
+    try {
+        console.log("[VoxShield] Fetching telemetry data...");
+        const res = await fetch('/fetch-telemetry?limit=25');
+        if (!res.ok) {
+            console.error("[VoxShield] HTTP Error:", res.status);
+            return;
+        }
+        
+        const data = await res.json();
+        console.log("[VoxShield] Fetched data:", data);
+
+        const tbody = document.getElementById("historyBody");
+
+        if (!tbody) {
+            console.error("[VoxShield] Error: <tbody id='historyBody'> not found in HTML!");
+            return;
+        }
+
+        const logsArray = Array.isArray(data) ? data : (data.logs || []);
+
+        if (logsArray.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" style="color:#6b7280; text-align:center;">no records loaded yet</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = "";
+        logsArray.forEach((log) => {
+            const id = log.id || '--';
+            const session = log.session_id || 'stream';
+            const centroid = log.spectral_centroid_mean ?? log.centroid_mean ?? '--';
+            const mfcc = log.mfcc_variance ?? log.mfcc_var ?? '--';
+            const conf = log.spoof_confidence ?? log.confidence ?? '--';
+            const verdict = log.verdict || 'UNKNOWN';
+            
+            const timeVal = log.created_at ? new Date(log.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
+            const isSpoof = verdict === "SPOOF_DETECTED";
+            
+            const row = document.createElement("tr");
+            row.innerHTML = `
+                <td>#${id}</td>
+                <td><code>${session}</code></td>
+                <td>${centroid} Hz</td>
+                <td>${mfcc}</td>
+                <td>${conf}%</td>
+                <td style="color: ${isSpoof ? '#ef4444' : '#10b981'}; font-weight: 600;">
+                    ${verdict}
+                </td>
+                <td>${timeVal}</td>
+            `;
+            tbody.appendChild(row);
+        });
+        console.log(`[VoxShield] Successfully rendered ${logsArray.length} rows.`);
+    } catch (err) {
+        console.error("[VoxShield] Error loading history:", err);
+    }
+};
+
 async function startCapture() {
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -66,12 +123,10 @@ async function startCapture() {
         }
     };
 
-    socket.onclose = (e) => {
-        console.warn("[VoxShield] Socket closed:", e.code);
+    socket.onclose = () => {
         setStatus(false, "disconnected");
         cleanupAudio();
-        // Stream band hote hi latest logs load kar lo
-        loadHistory();
+        window.loadHistory();
     };
 
     socket.onerror = (e) => {
@@ -94,7 +149,7 @@ function stopCapture() {
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
     setStatus(false, "idle");
-    loadHistory();
+    window.loadHistory();
 }
 
 function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
@@ -129,7 +184,6 @@ function floatTo16BitPCM(floatSamples) {
     return buffer;
 }
 
-// Update Real-Time Dashboard Cards ONLY (Lightweight & Instant)
 function updateDashboard(data) {
     if (document.getElementById("centroidVal")) {
         document.getElementById("centroidVal").innerText = (data.centroid_mean || '--') + " Hz";
@@ -155,61 +209,16 @@ function updateDashboard(data) {
     }
 }
 
-// Fetch & Render Threat History Ledger Table
-async function loadHistory() {
-    try {
-        const res = await fetch('/fetch-telemetry?limit=25');
-        if (!res.ok) return;
-        const data = await res.json();
-
-        const tbody = document.getElementById("historyBody") || 
-                      document.getElementById("telemetryBody") || 
-                      document.querySelector("table tbody");
-
-        if (!tbody) return;
-
-        const logsArray = Array.isArray(data) ? data : (data.logs || []);
-
-        if (logsArray.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7" style="color:#6b7280; text-align:center;">no records loaded yet</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = "";
-        logsArray.forEach((log) => {
-            const id = log.id || '--';
-            const session = log.session_id || 'stream';
-            
-            const centroid = log.spectral_centroid_mean ?? log.centroid_mean ?? '--';
-            const mfcc = log.mfcc_variance ?? log.mfcc_var ?? '--';
-            const conf = log.spoof_confidence ?? log.confidence ?? '--';
-            const verdict = log.verdict || 'UNKNOWN';
-            
-            const created = log.created_at;
-            const timeVal = created ? new Date(created).toLocaleTimeString() : new Date().toLocaleTimeString();
-
-            const isSpoof = verdict === "SPOOF_DETECTED";
-            
-            const row = document.createElement("tr");
-            row.innerHTML = `
-                <td>#${id}</td>
-                <td><code>${session}</code></td>
-                <td>${centroid} Hz</td>
-                <td>${mfcc}</td>
-                <td>${conf}%</td>
-                <td style="color: ${isSpoof ? '#ef4444' : '#10b981'}; font-weight: 600;">
-                    ${verdict}
-                </td>
-                <td>${timeVal}</td>
-            `;
-            tbody.appendChild(row);
-        });
-    } catch (err) {
-        console.error("[VoxShield] Error loading history:", err);
-    }
-}
-
-// Initial Load Handler
+// Event Listeners Initialization
 document.addEventListener("DOMContentLoaded", () => {
-    loadHistory();
+    // Initial Load
+    window.loadHistory();
+
+    // Direct event listener for Refresh Button
+    const refreshBtn = document.getElementById("refreshBtn");
+    if (refreshBtn) {
+        refreshBtn.addEventListener("click", () => {
+            window.loadHistory();
+        });
+    }
 });
