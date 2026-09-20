@@ -70,6 +70,8 @@ async function startCapture() {
         console.warn("[VoxShield] Socket closed:", e.code);
         setStatus(false, "disconnected");
         cleanupAudio();
+        // Stream band hote hi latest logs load kar lo
+        loadHistory();
     };
 
     socket.onerror = (e) => {
@@ -92,6 +94,7 @@ function stopCapture() {
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
     setStatus(false, "idle");
+    loadHistory();
 }
 
 function downsampleBuffer(buffer, inputSampleRate, outputSampleRate) {
@@ -126,7 +129,7 @@ function floatTo16BitPCM(floatSamples) {
     return buffer;
 }
 
-// Update Real-Time Dashboard Cards
+// Update Real-Time Dashboard Cards ONLY (Lightweight & Instant)
 function updateDashboard(data) {
     if (document.getElementById("centroidVal")) {
         document.getElementById("centroidVal").innerText = (data.centroid_mean || '--') + " Hz";
@@ -150,9 +153,6 @@ function updateDashboard(data) {
             banner.innerText = "✓ SAFE — Confidence " + confText + "%";
         }
     }
-
-    // Har incoming frame par auto reload history
-    loadHistory();
 }
 
 // Fetch & Render Threat History Ledger Table
@@ -162,15 +162,11 @@ async function loadHistory() {
         if (!res.ok) return;
         const data = await res.json();
 
-        // Target tbody (Fallback for multiple common container IDs)
         const tbody = document.getElementById("historyBody") || 
                       document.getElementById("telemetryBody") || 
                       document.querySelector("table tbody");
 
-        if (!tbody) {
-            console.error("[VoxShield] Table <tbody> element not found in HTML!");
-            return;
-        }
+        if (!tbody) return;
 
         const logsArray = Array.isArray(data) ? data : (data.logs || []);
 
@@ -184,7 +180,6 @@ async function loadHistory() {
             const id = log.id || '--';
             const session = log.session_id || 'stream';
             
-            // Fixed key mapping from main.py JSON
             const centroid = log.spectral_centroid_mean ?? log.centroid_mean ?? '--';
             const mfcc = log.mfcc_variance ?? log.mfcc_var ?? '--';
             const conf = log.spoof_confidence ?? log.confidence ?? '--';
