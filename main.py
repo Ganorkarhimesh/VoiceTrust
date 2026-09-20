@@ -30,6 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize Database Table on Startup
 init_db()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +40,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ----------------------------------------------------------------
 SAMPLE_RATE = 16000         
 SPOOF_THRESHOLD = 88.0       
-MIN_SAMPLES_FOR_ANALYSIS = SAMPLE_RATE  
+# 0.5 Seconds buffer for faster real-time DB commits & frontend rendering
+MIN_SAMPLES_FOR_ANALYSIS = int(SAMPLE_RATE * 0.5)  
 
 MFCC_VAR_HUMAN_FLOOR = 45.0
 CENTROID_SYNTHETIC_BAND = (1500, 2600)
@@ -47,7 +49,7 @@ CENTROID_SYNTHETIC_BAND = (1500, 2600)
 
 def extract_features(audio_float: np.ndarray, sr: int = SAMPLE_RATE):
     try:
-        if len(audio_float) < 1000:
+        if len(audio_float) < 800:
             return None
             
         if np.all(audio_float == 0):
@@ -134,26 +136,30 @@ def serve_js():
 
 @app.get("/fetch-telemetry")
 def fetch_telemetry(limit: int = 50, db: Session = Depends(get_db)):
-    rows = (
-        db.query(ThreatLog)
-        .order_by(ThreatLog.id.desc())
-        .limit(limit)
-        .all()
-    )
+    try:
+        rows = (
+            db.query(ThreatLog)
+            .order_by(ThreatLog.id.desc())
+            .limit(limit)
+            .all()
+        )
 
-    result = []
-    for r in rows:
-        result.append({
-            "id": r.id,
-            "session_id": r.session_id,
-            "spectral_centroid_mean": round(r.spectral_centroid_mean, 2),
-            "mfcc_variance": round(r.mfcc_variance, 2),
-            "spoof_confidence": round(r.spoof_confidence, 2),
-            "verdict": r.verdict,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        })
+        result = []
+        for r in rows:
+            result.append({
+                "id": r.id,
+                "session_id": r.session_id,
+                "spectral_centroid_mean": round(float(r.spectral_centroid_mean or 0.0), 2),
+                "mfcc_variance": round(float(r.mfcc_variance or 0.0), 2),
+                "spoof_confidence": round(float(r.spoof_confidence or 0.0), 2),
+                "verdict": r.verdict,
+                "created_at": r.created_at.isoformat() if hasattr(r, 'created_at') and r.created_at else None,
+            })
 
-    return {"count": len(result), "logs": result}
+        return {"count": len(result), "logs": result}
+    except Exception as e:
+        print(f"[VoxShield] Telemetry Fetch Error: {e}")
+        return {"count": 0, "logs": []}
 
 
 @app.websocket("/stream-audio")
@@ -192,6 +198,7 @@ async def stream_audio(ws: WebSocket):
                 verdict = "SPOOF_DETECTED" if confidence >= SPOOF_THRESHOLD else "SAFE"
 
                 db = SessionLocal()
+                log_id = None
                 try:
                     log_entry = save_log(
                         db,
@@ -202,6 +209,8 @@ async def stream_audio(ws: WebSocket):
                         verdict,
                     )
                     log_id = log_entry.id
+                except Exception as db_err:
+                    print(f"[VoxShield] DB Write Error: {db_err}")
                 finally:
                     db.close()
 
